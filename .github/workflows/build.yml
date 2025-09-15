@@ -65,6 +65,31 @@ jobs:
             }
           }
 
+      # Shim-Header & km-Include-Pfad finden
+      - name: Include-Shims + WDK km Pfad ermitteln
+        id: inc
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          # 1) Shim für "crt/intrin.h" anlegen, der <intrin.h> inkludiert
+          $shimRoot = Join-Path $pwd "build/include_shims"
+          New-Item -ItemType Directory -Force -Path (Join-Path $shimRoot "crt") | Out-Null
+          $shimFile = Join-Path $shimRoot "crt/intrin.h"
+          '@{
+#pragma once
+#include <intrin.h>
+}' -replace '^\@\{','' | Set-Content -Path $shimFile -Encoding ascii -NoNewline
+
+          # 2) Aktuellste Windows Kits Include-Version ermitteln
+          $kitsInc = "C:\Program Files (x86)\Windows Kits\10\Include"
+          if(-not (Test-Path $kitsInc)){ throw "Windows Kits Include-Verzeichnis nicht gefunden: $kitsInc" }
+          $ver = (Get-ChildItem $kitsInc -Directory | Sort-Object Name -Descending | Select-Object -First 1).Name
+          $km  = Join-Path (Join-Path $kitsInc $ver) "km"
+          if(-not (Test-Path $km)){ throw "WDK km-Includes nicht gefunden: $km" }
+
+          "SHIM_ROOT=$shimRoot" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          "WDK_KM=$km"         | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+
       # Wir erzwingen bewusst den VS-Generator (stabil auf GitHub Runnern)
       - name: Generator & Build-Flags setzen
         id: gen
@@ -80,9 +105,11 @@ jobs:
         run: |
           $G="${{ steps.gen.outputs.GEN }}"; $P=$env:NUMBER_OF_PROCESSORS
           $CFGDBG="${{ steps.gen.outputs.CFGDBG }}"; $CFGREL="${{ steps.gen.outputs.CFGREL }}"
-          cmake -G "$G" -A x64 -DWITH_TEST=OFF -S . -B build/debug/amd64
+          $CFLAGS  = "/I`"${{ steps.inc.outputs.SHIM_ROOT }}`" /I`"${{ steps.inc.outputs.WDK_KM }}`""
+          $CXXFLAGS= $CFLAGS
+          cmake -G "$G" -A x64  -DWITH_TEST=OFF -DCMAKE_C_FLAGS="$CFLAGS" -DCMAKE_CXX_FLAGS="$CXXFLAGS" -S . -B build/debug/amd64
           cmake --build build/debug/amd64   --parallel $P $CFGDBG
-          cmake -G "$G" -A x64 -DWITH_TEST=OFF -S . -B build/release/amd64
+          cmake -G "$G" -A x64  -DWITH_TEST=OFF -DCMAKE_C_FLAGS="$CFLAGS" -DCMAKE_CXX_FLAGS="$CXXFLAGS" -S . -B build/release/amd64
           cmake --build build/release/amd64 --parallel $P $CFGREL
 
       # ---- x86 ----
@@ -91,9 +118,11 @@ jobs:
         run: |
           $G="${{ steps.gen.outputs.GEN }}"; $P=$env:NUMBER_OF_PROCESSORS
           $CFGDBG="${{ steps.gen.outputs.CFGDBG }}"; $CFGREL="${{ steps.gen.outputs.CFGREL }}"
-          cmake -G "$G" -A Win32 -DWITH_TEST=OFF -S . -B build/debug/x86
+          $CFLAGS  = "/I`"${{ steps.inc.outputs.SHIM_ROOT }}`" /I`"${{ steps.inc.outputs.WDK_KM }}`""
+          $CXXFLAGS= $CFLAGS
+          cmake -G "$G" -A Win32 -DWITH_TEST=OFF -DCMAKE_C_FLAGS="$CFLAGS" -DCMAKE_CXX_FLAGS="$CXXFLAGS" -S . -B build/debug/x86
           cmake --build build/debug/x86     --parallel $P $CFGDBG
-          cmake -G "$G" -A Win32 -DWITH_TEST=OFF -S . -B build/release/x86
+          cmake -G "$G" -A Win32 -DWITH_TEST=OFF -DCMAKE_C_FLAGS="$CFLAGS" -DCMAKE_CXX_FLAGS="$CXXFLAGS" -S . -B build/release/x86
           cmake --build build/release/x86   --parallel $P $CFGREL
 
       # ---- ARM64 ----
@@ -102,9 +131,11 @@ jobs:
         run: |
           $G="${{ steps.gen.outputs.GEN }}"; $P=$env:NUMBER_OF_PROCESSORS
           $CFGDBG="${{ steps.gen.outputs.CFGDBG }}"; $CFGREL="${{ steps.gen.outputs.CFGREL }}"
-          cmake -G "$G" -A ARM64 -DWITH_TEST=OFF -S . -B build/debug/aarch64
+          $CFLAGS  = "/I`"${{ steps.inc.outputs.SHIM_ROOT }}`" /I`"${{ steps.inc.outputs.WDK_KM }}`""
+          $CXXFLAGS= $CFLAGS
+          cmake -G "$G" -A ARM64 -DWITH_TEST=OFF -DCMAKE_C_FLAGS="$CFLAGS" -DCMAKE_CXX_FLAGS="$CXXFLAGS" -S . -B build/debug/aarch64
           cmake --build build/debug/aarch64 --parallel $P $CFGDBG
-          cmake -G "$G" -A ARM64 -DWITH_TEST=OFF -S . -B build/release/aarch64
+          cmake -G "$G" -A ARM64 -DWITH_TEST=OFF -DCMAKE_C_FLAGS="$CFLAGS" -DCMAKE_CXX_FLAGS="$CXXFLAGS" -S . -B build/release/aarch64
           cmake --build build/release/aarch64 --parallel $P $CFGREL
 
       # ---- ARMv7 (ARM32) ----
@@ -113,23 +144,25 @@ jobs:
         run: |
           $G="${{ steps.gen.outputs.GEN }}"; $P=$env:NUMBER_OF_PROCESSORS
           $CFGDBG="${{ steps.gen.outputs.CFGDBG }}"; $CFGREL="${{ steps.gen.outputs.CFGREL }}"
-          cmake -G "$G" -A ARM -DWITH_TEST=OFF -S . -B build/debug/arm
+          $CFLAGS  = "/I`"${{ steps.inc.outputs.SHIM_ROOT }}`" /I`"${{ steps.inc.outputs.WDK_KM }}`""
+          $CXXFLAGS= $CFLAGS
+          cmake -G "$G" -A ARM   -DWITH_TEST=OFF -DCMAKE_C_FLAGS="$CFLAGS" -DCMAKE_CXX_FLAGS="$CXXFLAGS" -S . -B build/debug/arm
           cmake --build build/debug/arm     --parallel $P $CFGDBG
-          cmake -G "$G" -A ARM -DWITH_TEST=OFF -S . -B build/release/arm
+          cmake -G "$G" -A ARM   -DWITH_TEST=OFF -DCMAKE_C_FLAGS="$CFLAGS" -DCMAKE_CXX_FLAGS="$CXXFLAGS" -S . -B build/release/arm
           cmake --build build/release/arm   --parallel $P $CFGREL
 
       - name: PDB einsammeln (rekursiv)
         shell: pwsh
         run: |
           $map = @{
-            "build/debug/amd64"   = "build/pdb/debug/amd64"
-            "build/debug/x86"     = "build/pdb/debug/x86"
-            "build/debug/aarch64" = "build/pdb/debug/aarch64"
-            "build/debug/arm"     = "build/pdb/debug/arm"
-            "build/release/amd64" = "build/pdb/release/amd64"
-            "build/release/x86"   = "build/pdb/release/x86"
+            "build/debug/amd64"     = "build/pdb/debug/amd64"
+            "build/debug/x86"       = "build/pdb/debug/x86"
+            "build/debug/aarch64"   = "build/pdb/debug/aarch64"
+            "build/debug/arm"       = "build/pdb/debug/arm"
+            "build/release/amd64"   = "build/pdb/release/amd64"
+            "build/release/x86"     = "build/pdb/release/x86"
             "build/release/aarch64" = "build/pdb/release/aarch64"
-            "build/release/arm"   = "build/pdb/release/arm"
+            "build/release/arm"     = "build/pdb/release/arm"
           }
           foreach($k in $map.Keys){
             Get-ChildItem $k -Recurse -Filter *.pdb -EA SilentlyContinue | `
