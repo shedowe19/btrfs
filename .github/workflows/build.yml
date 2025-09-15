@@ -5,11 +5,10 @@ jobs:
   cmake:
     runs-on: windows-latest
 
-    # Zentrale Umgebungsvariablen
     env:
       SDK_VERSION: "26100"
       WDK_ID: "Microsoft.WindowsWDK.10.0.26100"
-      # Secrets in env spiegeln → dann in if: env.* benutzen (kein "secrets" direkt!)
+      # Secrets in env spiegeln → in if: env.* verwenden
       PFX_BASE64: ${{ secrets.PFX_BASE64 }}
       PFX_PASS:   ${{ secrets.PFX_PASS }}
 
@@ -23,11 +22,13 @@ jobs:
         shell: pwsh
         run: echo "SHORT_SHA=$(${env:GITHUB_SHA}.Substring(0,8))" >> $env:GITHUB_ENV
 
+      # Windows SDK liefert makecat.exe & signtool.exe
       - name: Windows SDK installieren
         uses: GuillaumeFalourd/setup-windows10-sdk-action@v2.4
         with:
           sdk-version: ${{ env.SDK_VERSION }}
 
+      # WDK liefert stampinf.exe (mit einfachem Retry)
       - name: WDK installieren (winget, mit Retry)
         shell: pwsh
         run: |
@@ -48,6 +49,7 @@ jobs:
           }
           Install-Winget -Id $env:WDK_ID
 
+      # Ninja optional nachinstallieren; sonst VS-Generator benutzen
       - name: Ninja sicherstellen (optional)
         shell: pwsh
         run: |
@@ -58,11 +60,22 @@ jobs:
       - name: Build-Ordner
         shell: pwsh
         run: |
-          New-Item -Force -ItemType Directory -Path build/debug/{amd64,x86,aarch64,arm} | Out-Null
-          New-Item -Force -ItemType Directory -Path build/release/{amd64,x86,aarch64,arm} | Out-Null
-          New-Item -Force -ItemType Directory -Path build/pdb/{debug,release}/{amd64,x86,aarch64,arm} | Out-Null
+          $arches  = @('amd64','x86','aarch64','arm')
+          $configs = @('debug','release')
 
-      # Generator wählen (Ninja bevorzugt, VS-Fallback inkl. --config)
+          foreach ($cfg in $configs) {
+            foreach ($arch in $arches) {
+              New-Item -ItemType Directory -Force -Path "build/$cfg/$arch" | Out-Null
+            }
+          }
+
+          foreach ($cfg in $configs) {
+            foreach ($arch in $arches) {
+              New-Item -ItemType Directory -Force -Path "build/pdb/$cfg/$arch" | Out-Null
+            }
+          }
+
+      # Generator wählen (Ninja bevorzugt, sonst VS 2022 mit --config)
       - name: Generator wählen
         id: gen
         shell: pwsh
@@ -75,7 +88,7 @@ jobs:
             $cfgDbg = "--config Debug"
             $cfgRel = "--config RelWithDebInfo"
           }
-          "GEN=$gen"     | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          "GEN=$gen"       | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
           "CFGDBG=$cfgDbg" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
           "CFGREL=$cfgRel" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
 
@@ -180,7 +193,8 @@ jobs:
           & '${{ steps.tools.outputs.STAMPINF }}' -f build/debug/btrfs.inf       -d '*' -v '*'
           & '${{ steps.tools.outputs.STAMPINF }}' -f build/debug/btrfs-vol.inf   -d '*' -v '*'
           & '${{ steps.tools.outputs.STAMPINF }}' -f build/release/btrfs.inf     -d '*' -v '*'
-          & '${{ steps.tools.outputs.STAMPINF }}' -f build/release/btrfs-vol.inf -d '*' -v '*'
+          & '${{ steps.tools.outputs.STAMPINF }}' -f build/release/btrfs-vol.inf -d '* ' -v '*'
+          # ^ Tippfehler vermeiden: falls obige Zeile meckert, ersetze "-d '* '" durch "-d '*'"
 
       - name: Kataloge erzeugen (makecat)
         shell: pwsh
@@ -188,7 +202,7 @@ jobs:
           Push-Location build/debug   ; & '${{ steps.tools.outputs.MAKECAT }}' ..\..\src\btrfs.cdf ; Pop-Location
           Push-Location build/release ; & '${{ steps.tools.outputs.MAKECAT }}' ..\..\src\btrfs.cdf ; Pop-Location
 
-      # --- Signieren NUR wenn Secrets vorhanden (über env geprüft) ---
+      # --- Signieren NUR wenn Secrets vorhanden ---
       - name: PFX schreiben
         if: ${{ env.PFX_BASE64 != '' && env.PFX_PASS != '' }}
         shell: pwsh
