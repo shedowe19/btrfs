@@ -5,8 +5,12 @@ jobs:
   cmake:
     runs-on: windows-latest
 
+    env:
+      SDK_VERSION: "26100"
+      WDK_ID: "Microsoft.WindowsWDK.10.0.26100"
+
     steps:
-      - name: Checkout
+      - name: Checkout (inkl. Submodule)
         uses: actions/checkout@v4
         with:
           submodules: recursive
@@ -16,85 +20,110 @@ jobs:
         run: echo "SHORT_SHA=$(${env:GITHUB_SHA}.Substring(0,8))" >> $env:GITHUB_ENV
 
       # Windows SDK sicherstellen (liefert u. a. makecat.exe & signtool.exe)
-      - name: Windows SDK 26100 installieren
+      - name: Windows SDK installieren
         uses: GuillaumeFalourd/setup-windows10-sdk-action@v2.4
         with:
-          sdk-version: 26100
+          sdk-version: ${{ env.SDK_VERSION }}
 
-      # WDK installieren (liefert stampinf.exe)
-      - name: WDK 26100 installieren (winget)
+      # WDK für stampinf.exe via winget (mit einfachem Retry)
+      - name: WDK installieren (winget)
         shell: pwsh
         run: |
+          $ErrorActionPreference = 'Stop'
           winget source update
-          winget install --source winget --exact --id Microsoft.WindowsWDK.10.0.26100 `
-            --accept-source-agreements --accept-package-agreements --verbose-logs
+          function Install-Winget {
+            param([string]$Id)
+            for($i=1;$i -le 3;$i++){
+              try {
+                winget install --source winget --exact --id $Id `
+                  --accept-source-agreements --accept-package-agreements --silent --verbose-logs
+                return
+              } catch {
+                Start-Sleep -Seconds (10*$i)
+                if($i -eq 3){ throw }
+              }
+            }
+          }
+          Install-Winget -Id $env:WDK_ID
 
-      # --- Build-Ordner ---
-      - name: Build-Verzeichnisse anlegen
+      - name: Build-Ordner
         shell: pwsh
         run: |
-          New-Item -Force -ItemType Directory -Path build/debug/{amd64,x86,aarch64,arm}     | Out-Null
-          New-Item -Force -ItemType Directory -Path build/release/{amd64,x86,aarch64,arm}   | Out-Null
+          New-Item -Force -ItemType Directory -Path build/debug/{amd64,x86,aarch64,arm} | Out-Null
+          New-Item -Force -ItemType Directory -Path build/release/{amd64,x86,aarch64,arm} | Out-Null
           New-Item -Force -ItemType Directory -Path build/pdb/{debug,release}/{amd64,x86,aarch64,arm} | Out-Null
 
-      # --- AMD64 ---
+      # Hilfsfunktion: Generator bestimmen (Ninja bevorzugt, sonst VS 2022)
+      - name: Generator wählen
+        id: gen
+        shell: pwsh
+        run: |
+          $gen = "Ninja"
+          $ninja = (Get-Command ninja.exe -EA SilentlyContinue)
+          if(-not $ninja){ $gen = "Visual Studio 17 2022" }
+          "GEN=$gen" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+
+      # ---- AMD64 ----
       - name: MSVC Env (amd64)
         uses: ilammy/msvc-dev-cmd@v1
         with:
           arch: amd64
-      - name: CMake Builds (amd64)
+      - name: CMake (amd64)
         shell: pwsh
         run: |
-          $procs = $env:NUMBER_OF_PROCESSORS
-          cmake -G "Ninja" -DCMAKE_TOOLCHAIN_FILE=msvc-amd64.cmake   -DCMAKE_BUILD_TYPE=Debug          -DWITH_TEST=OFF -S . -B build/debug/amd64
-          cmake --build build/debug/amd64   --parallel $procs
-          cmake -G "Ninja" -DCMAKE_TOOLCHAIN_FILE=msvc-amd64.cmake   -DCMAKE_BUILD_TYPE=RelWithDebInfo -DWITH_TEST=OFF -S . -B build/release/amd64
-          cmake --build build/release/amd64 --parallel $procs
+          $G="${{ steps.gen.outputs.GEN }}"
+          $P=$env:NUMBER_OF_PROCESSORS
+          cmake -G "$G" -DCMAKE_TOOLCHAIN_FILE=msvc-amd64.cmake   -DCMAKE_BUILD_TYPE=Debug          -DWITH_TEST=OFF -S . -B build/debug/amd64
+          cmake --build build/debug/amd64   --parallel $P
+          cmake -G "$G" -DCMAKE_TOOLCHAIN_FILE=msvc-amd64.cmake   -DCMAKE_BUILD_TYPE=RelWithDebInfo -DWITH_TEST=OFF -S . -B build/release/amd64
+          cmake --build build/release/amd64 --parallel $P
 
-      # --- x86 (32-bit) ---
+      # ---- x86 ----
       - name: MSVC Env (amd64_x86)
         uses: ilammy/msvc-dev-cmd@v1
         with:
           arch: amd64_x86
-      - name: CMake Builds (x86)
+      - name: CMake (x86)
         shell: pwsh
         run: |
-          $procs = $env:NUMBER_OF_PROCESSORS
-          cmake -G "Ninja" -DCMAKE_TOOLCHAIN_FILE=msvc-x86.cmake     -DCMAKE_BUILD_TYPE=Debug          -DWITH_TEST=OFF -S . -B build/debug/x86
-          cmake --build build/debug/x86     --parallel $procs
-          cmake -G "Ninja" -DCMAKE_TOOLCHAIN_FILE=msvc-x86.cmake     -DCMAKE_BUILD_TYPE=RelWithDebInfo -DWITH_TEST=OFF -S . -B build/release/x86
-          cmake --build build/release/x86   --parallel $procs
+          $G="${{ steps.gen.outputs.GEN }}"
+          $P=$env:NUMBER_OF_PROCESSORS
+          cmake -G "$G" -DCMAKE_TOOLCHAIN_FILE=msvc-x86.cmake     -DCMAKE_BUILD_TYPE=Debug          -DWITH_TEST=OFF -S . -B build/debug/x86
+          cmake --build build/debug/x86     --parallel $P
+          cmake -G "$G" -DCMAKE_TOOLCHAIN_FILE=msvc-x86.cmake     -DCMAKE_BUILD_TYPE=RelWithDebInfo -DWITH_TEST=OFF -S . -B build/release/x86
+          cmake --build build/release/x86   --parallel $P
 
-      # --- ARM64 ---
+      # ---- ARM64 ----
       - name: MSVC Env (amd64_arm64)
         uses: ilammy/msvc-dev-cmd@v1
         with:
           arch: amd64_arm64
-      - name: CMake Builds (arm64)
+      - name: CMake (arm64)
         shell: pwsh
         run: |
-          $procs = $env:NUMBER_OF_PROCESSORS
-          cmake -G "Ninja" -DCMAKE_TOOLCHAIN_FILE=msvc-aarch64.cmake -DCMAKE_BUILD_TYPE=Debug          -DWITH_TEST=OFF -S . -B build/debug/aarch64
-          cmake --build build/debug/aarch64 --parallel $procs
-          cmake -G "Ninja" -DCMAKE_TOOLCHAIN_FILE=msvc-aarch64.cmake -DCMAKE_BUILD_TYPE=RelWithDebInfo -DWITH_TEST=OFF -S . -B build/release/aarch64
-          cmake --build build/release/aarch64 --parallel $procs
+          $G="${{ steps.gen.outputs.GEN }}"
+          $P=$env:NUMBER_OF_PROCESSORS
+          cmake -G "$G" -DCMAKE_TOOLCHAIN_FILE=msvc-aarch64.cmake -DCMAKE_BUILD_TYPE=Debug          -DWITH_TEST=OFF -S . -B build/debug/aarch64
+          cmake --build build/debug/aarch64 --parallel $P
+          cmake -G "$G" -DCMAKE_TOOLCHAIN_FILE=msvc-aarch64.cmake -DCMAKE_BUILD_TYPE=RelWithDebInfo -DWITH_TEST=OFF -S . -B build/release/aarch64
+          cmake --build build/release/aarch64 --parallel $P
 
-      # --- ARMv7 ---
+      # ---- ARMv7 ----
       - name: MSVC Env (amd64_arm)
         uses: ilammy/msvc-dev-cmd@v1
         with:
           arch: amd64_arm
-      - name: CMake Builds (armv7)
+      - name: CMake (armv7)
         shell: pwsh
         run: |
-          $procs = $env:NUMBER_OF_PROCESSORS
-          cmake -G "Ninja" -DCMAKE_TOOLCHAIN_FILE=msvc-armv7.cmake   -DCMAKE_BUILD_TYPE=Debug          -DWITH_TEST=OFF -S . -B build/debug/arm
-          cmake --build build/debug/arm     --parallel $procs
-          cmake -G "Ninja" -DCMAKE_TOOLCHAIN_FILE=msvc-armv7.cmake   -DCMAKE_BUILD_TYPE=RelWithDebInfo -DWITH_TEST=OFF -S . -B build/release/arm
-          cmake --build build/release/arm   --parallel $procs
+          $G="${{ steps.gen.outputs.GEN }}"
+          $P=$env:NUMBER_OF_PROCESSORS
+          cmake -G "$G" -DCMAKE_TOOLCHAIN_FILE=msvc-armv7.cmake   -DCMAKE_BUILD_TYPE=Debug          -DWITH_TEST=OFF -S . -B build/debug/arm
+          cmake --build build/debug/arm     --parallel $P
+          cmake -G "$G" -DCMAKE_TOOLCHAIN_FILE=msvc-armv7.cmake   -DCMAKE_BUILD_TYPE=RelWithDebInfo -DWITH_TEST=OFF -S . -B build/release/arm
+          cmake --build build/release/arm   --parallel $P
 
-      # --- PDB einsammeln ---
-      - name: PDB sammeln
+      - name: PDB einsammeln
         shell: pwsh
         run: |
           Get-ChildItem build/debug/amd64/*.pdb     -EA SilentlyContinue | Move-Item -Dest build/pdb/debug/amd64/     -Force
@@ -106,10 +135,11 @@ jobs:
           Get-ChildItem build/release/aarch64/*.pdb -EA SilentlyContinue | Move-Item -Dest build/pdb/release/aarch64/ -Force
           Get-ChildItem build/release/arm/*.pdb     -EA SilentlyContinue | Move-Item -Dest build/pdb/release/arm/     -Force
 
-      # --- INF & CAT ---
       - name: INF kopieren
         shell: pwsh
         run: |
+          if(-not (Test-Path src/btrfs.inf)){ throw "src/btrfs.inf fehlt" }
+          if(-not (Test-Path src/btrfs-vol.inf)){ throw "src/btrfs-vol.inf fehlt" }
           Copy-Item src/btrfs.inf,src/btrfs-vol.inf build/debug/   -Force
           Copy-Item src/btrfs.inf,src/btrfs-vol.inf build/release/ -Force
 
@@ -139,24 +169,24 @@ jobs:
       - name: Kataloge erzeugen (makecat)
         shell: pwsh
         run: |
-          Push-Location build/debug   ; & '${{ steps.tools.outputs.MAKECAT }}' ..\..\src\btrfs.cdf   ; Pop-Location
-          Push-Location build/release ; & '${{ steps.tools.outputs.MAKECAT }}' ..\..\src\btrfs.cdf   ; Pop-Location
+          Push-Location build/debug   ; & '${{ steps.tools.outputs.MAKECAT }}' ..\..\src\btrfs.cdf ; Pop-Location
+          Push-Location build/release ; & '${{ steps.tools.outputs.MAKECAT }}' ..\..\src\btrfs.cdf ; Pop-Location
 
-      # --- Code Signing via PFX & signtool ---
+      # Signieren NUR wenn Secrets existieren
       - name: PFX schreiben
+        if: ${{ secrets.PFX_BASE64 != '' && secrets.PFX_PASS != '' }}
         env:
           PFX_BASE64: ${{ secrets.PFX_BASE64 }}
         shell: pwsh
         run: |
-          if ([string]::IsNullOrWhiteSpace($env:PFX_BASE64)) { throw "Secret PFX_BASE64 fehlt." }
           [IO.File]::WriteAllBytes("codesigning.pfx",[Convert]::FromBase64String($env:PFX_BASE64))
 
       - name: CAT signieren
+        if: ${{ secrets.PFX_BASE64 != '' && secrets.PFX_PASS != '' }}
         env:
           PFX_PASS: ${{ secrets.PFX_PASS }}
         shell: pwsh
         run: |
-          if ([string]::IsNullOrWhiteSpace($env:PFX_PASS)) { throw "Secret PFX_PASS fehlt." }
           Get-ChildItem build -Recurse -Filter btrfs.cat | ForEach-Object {
             & '${{ steps.tools.outputs.SIGNTOOL }}' sign `
               /fd sha256 /td sha256 /tr http://timestamp.digicert.com `
@@ -165,6 +195,7 @@ jobs:
           }
 
       - name: BINs/DLLs signieren (mit /ph)
+        if: ${{ secrets.PFX_BASE64 != '' && secrets.PFX_PASS != '' }}
         env:
           PFX_PASS: ${{ secrets.PFX_PASS }}
         shell: pwsh
