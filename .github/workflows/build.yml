@@ -75,10 +75,7 @@ jobs:
           $shimRoot = Join-Path $pwd "build/include_shims"
           New-Item -ItemType Directory -Force -Path (Join-Path $shimRoot "crt") | Out-Null
           $shimFile = Join-Path $shimRoot "crt/intrin.h"
-          '@{
-#pragma once
-#include <intrin.h>
-}' -replace '^\@\{','' | Set-Content -Path $shimFile -Encoding ascii -NoNewline
+          Set-Content -Path $shimFile -Encoding ascii -NoNewline -Value "#pragma once`r`n#include <intrin.h>`r`n"
 
           # 2) Aktuellste Windows Kits Include-Version ermitteln
           $kitsInc = "C:\Program Files (x86)\Windows Kits\10\Include"
@@ -91,7 +88,7 @@ jobs:
           "WDK_KM=$km"         | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
 
       # Wir erzwingen bewusst den VS-Generator (stabil auf GitHub Runnern)
-      - name: Generator & Build-Flags setzen
+      - name: "Generator und Build-Flags setzen"
         id: gen
         shell: pwsh
         run: |
