@@ -1,19 +1,9 @@
 name: build
 on: [push, workflow_dispatch]
 
-env:
-  # Nur wenn du PATH wirklich global überschreiben willst – sonst weglassen.
-  PATH: /usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/etc/eselect/wine/bin
-
 jobs:
   cmake:
-    runs-on: [self-hosted, msvc-wine]
-
-    # Container korrekt angeben:
-    container:
-      image: madduci/docker-wine-msvc:17.8-2022   # <-- dein Image hier
-      volumes:
-        - /var/run/pcscd/pcscd.comm:/var/run/pcscd/pcscd.comm
+    runs-on: windows-latest
 
     steps:
       - uses: actions/checkout@v4
@@ -21,89 +11,124 @@ jobs:
           submodules: recursive
 
       - name: SHORT_SHA setzen
-        run: echo "SHORT_SHA=${GITHUB_SHA::8}" >> $GITHUB_ENV
+        shell: pwsh
+        run: echo "SHORT_SHA=$(${env:GITHUB_SHA}.Substring(0,8))" >> $env:GITHUB_ENV
 
-      - name: Build-Verzeichnisse
+      # (Optional) Sicherstellen, dass ein aktuelles Windows SDK installiert ist
+      - name: Windows SDK 26100 installieren (optional)
+        uses: GuillaumeFalourd/setup-windows10-sdk-action@v2.4
+        with:
+          sdk-version: 26100
+
+      # WDK für stampinf.exe installieren (per WinGet)
+      - name: WDK installieren (WinGet)
+        shell: pwsh
         run: |
-          mkdir -p build/debug/{amd64,x86,aarch64,arm}
-          mkdir -p build/release/{amd64,x86,aarch64,arm}
-          mkdir -p build/pdb/{debug,release}/{amd64,x86,aarch64,arm}
+          winget install -e --id Microsoft.WindowsWDK -h --accept-source-agreements --accept-package-agreements
+          # Fallback auf spezifische Versionen wäre: Microsoft.WindowsWDK.10.0.26100
+        # Hinweis: WinGet ist auf windows-latest verfügbar
 
+      - name: Build-Verzeichnisse anlegen
+        shell: pwsh
+        run: |
+          New-Item -Force -ItemType Directory -Path build/debug/{amd64,x86,aarch64,arm} | Out-Null
+          New-Item -Force -ItemType Directory -Path build/release/{amd64,x86,aarch64,arm} | Out-Null
+          New-Item -Force -ItemType Directory -Path build/pdb/{debug,release}/{amd64,x86,aarch64,arm} | Out-Null
+
+      # Debug-Builds
       - name: CMake Debug Builds
+        shell: pwsh
         run: |
-          cmake -DCMAKE_TOOLCHAIN_FILE=msvc-amd64.cmake  -DCMAKE_BUILD_TYPE=Debug -DWITH_TEST=OFF -S . -B build/debug/amd64  && cmake --build build/debug/amd64  --parallel `nproc`
-          cmake -DCMAKE_TOOLCHAIN_FILE=msvc-x86.cmake    -DCMAKE_BUILD_TYPE=Debug -DWITH_TEST=OFF -S . -B build/debug/x86    && cmake --build build/debug/x86    --parallel `nproc`
-          cmake -DCMAKE_TOOLCHAIN_FILE=msvc-aarch64.cmake -DCMAKE_BUILD_TYPE=Debug -DWITH_TEST=OFF -S . -B build/debug/aarch64 && cmake --build build/debug/aarch64 --parallel `nproc`
-          cmake -DCMAKE_TOOLCHAIN_FILE=msvc-armv7.cmake  -DCMAKE_BUILD_TYPE=Debug -DWITH_TEST=OFF -S . -B build/debug/arm    && cmake --build build/debug/arm    --parallel `nproc`
+          $procs = $env:NUMBER_OF_PROCESSORS
+          cmake -DCMAKE_TOOLCHAIN_FILE=msvc-amd64.cmake   -DCMAKE_BUILD_TYPE=Debug -DWITH_TEST=OFF -S . -B build/debug/amd64   ; cmake --build build/debug/amd64   --parallel $procs
+          cmake -DCMAKE_TOOLCHAIN_FILE=msvc-x86.cmake     -DCMAKE_BUILD_TYPE=Debug -DWITH_TEST=OFF -S . -B build/debug/x86     ; cmake --build build/debug/x86     --parallel $procs
+          cmake -DCMAKE_TOOLCHAIN_FILE=msvc-aarch64.cmake -DCMAKE_BUILD_TYPE=Debug -DWITH_TEST=OFF -S . -B build/debug/aarch64 ; cmake --build build/debug/aarch64 --parallel $procs
+          cmake -DCMAKE_TOOLCHAIN_FILE=msvc-armv7.cmake   -DCMAKE_BUILD_TYPE=Debug -DWITH_TEST=OFF -S . -B build/debug/arm     ; cmake --build build/debug/arm     --parallel $procs
 
+      # Release-Builds
       - name: CMake Release (RelWithDebInfo)
+        shell: pwsh
         run: |
-          cmake -DCMAKE_TOOLCHAIN_FILE=msvc-amd64.cmake  -DCMAKE_BUILD_TYPE=RelWithDebInfo -DWITH_TEST=OFF -S . -B build/release/amd64  && cmake --build build/release/amd64  --parallel `nproc`
-          cmake -DCMAKE_TOOLCHAIN_FILE=msvc-x86.cmake    -DCMAKE_BUILD_TYPE=RelWithDebInfo -DWITH_TEST=OFF -S . -B build/release/x86    && cmake --build build/release/x86    --parallel `nproc`
-          cmake -DCMAKE_TOOLCHAIN_FILE=msvc-aarch64.cmake -DCMAKE_BUILD_TYPE=RelWithDebInfo -DWITH_TEST=OFF -S . -B build/release/aarch64 && cmake --build build/release/aarch64 --parallel `nproc`
-          cmake -DCMAKE_TOOLCHAIN_FILE=msvc-armv7.cmake  -DCMAKE_BUILD_TYPE=RelWithDebInfo -DWITH_TEST=OFF -S . -B build/release/arm    && cmake --build build/release/arm    --parallel `nproc`
+          $procs = $env:NUMBER_OF_PROCESSORS
+          cmake -DCMAKE_TOOLCHAIN_FILE=msvc-amd64.cmake   -DCMAKE_BUILD_TYPE=RelWithDebInfo -DWITH_TEST=OFF -S . -B build/release/amd64   ; cmake --build build/release/amd64   --parallel $procs
+          cmake -DCMAKE_TOOLCHAIN_FILE=msvc-x86.cmake     -DCMAKE_BUILD_TYPE=RelWithDebInfo -DWITH_TEST=OFF -S . -B build/release/x86     ; cmake --build build/release/x86     --parallel $procs
+          cmake -DCMAKE_TOOLCHAIN_FILE=msvc-aarch64.cmake -DCMAKE_BUILD_TYPE=RelWithDebInfo -DWITH_TEST=OFF -S . -B build/release/aarch64 ; cmake --build build/release/aarch64 --parallel $procs
+          cmake -DCMAKE_TOOLCHAIN_FILE=msvc-armv7.cmake   -DCMAKE_BUILD_TYPE=RelWithDebInfo -DWITH_TEST=OFF -S . -B build/release/arm     ; cmake --build build/release/arm     --parallel $procs
 
       - name: PDB einsammeln
+        shell: pwsh
         run: |
-          mv build/debug/amd64/*.pdb     build/pdb/debug/amd64/     || true
-          mv build/debug/x86/*.pdb       build/pdb/debug/x86/       || true
-          mv build/debug/aarch64/*.pdb   build/pdb/debug/aarch64/   || true
-          mv build/debug/arm/*.pdb       build/pdb/debug/arm/       || true
-          mv build/release/amd64/*.pdb   build/pdb/release/amd64/   || true
-          mv build/release/x86/*.pdb     build/pdb/release/x86/     || true
-          mv build/release/aarch64/*.pdb build/pdb/release/aarch64/ || true
-          mv build/release/arm/*.pdb     build/pdb/release/arm/     || true
+          Get-ChildItem build/debug/amd64/*.pdb     -ErrorAction SilentlyContinue | Move-Item -Destination build/pdb/debug/amd64/     -Force
+          Get-ChildItem build/debug/x86/*.pdb       -ErrorAction SilentlyContinue | Move-Item -Destination build/pdb/debug/x86/       -Force
+          Get-ChildItem build/debug/aarch64/*.pdb   -ErrorAction SilentlyContinue | Move-Item -Destination build/pdb/debug/aarch64/   -Force
+          Get-ChildItem build/debug/arm/*.pdb       -ErrorAction SilentlyContinue | Move-Item -Destination build/pdb/debug/arm/       -Force
+          Get-ChildItem build/release/amd64/*.pdb   -ErrorAction SilentlyContinue | Move-Item -Destination build/pdb/release/amd64/   -Force
+          Get-ChildItem build/release/x86/*.pdb     -ErrorAction SilentlyContinue | Move-Item -Destination build/pdb/release/x86/     -Force
+          Get-ChildItem build/release/aarch64/*.pdb -ErrorAction SilentlyContinue | Move-Item -Destination build/pdb/release/aarch64/ -Force
+          Get-ChildItem build/release/arm/*.pdb     -ErrorAction SilentlyContinue | Move-Item -Destination build/pdb/release/arm/     -Force
 
       - name: INF kopieren
+        shell: pwsh
         run: |
-          cp src/{btrfs,btrfs-vol}.inf build/debug/
-          cp src/{btrfs,btrfs-vol}.inf build/release/
+          Copy-Item src/btrfs.inf,src/btrfs-vol.inf build/debug/   -Force
+          Copy-Item src/btrfs.inf,src/btrfs-vol.inf build/release/ -Force
+
+      - name: Tools (stampinf/makecat/signtool) finden
+        id: tools
+        shell: pwsh
+        run: |
+          $base = "C:\Program Files (x86)\Windows Kits\10\bin"
+          $makecat  = Get-ChildItem $base -Recurse -Filter makecat.exe  | Select-Object -First 1
+          $stampinf = Get-ChildItem $base -Recurse -Filter stampinf.exe | Select-Object -First 1
+          $signtool = Get-ChildItem $base -Recurse -Filter signtool.exe | Select-Object -First 1
+          if(-not $makecat){ throw "makecat.exe nicht gefunden (Windows SDK fehlt?)" }
+          if(-not $stampinf){ throw "stampinf.exe nicht gefunden (WDK fehlt?)" }
+          if(-not $signtool){ throw "signtool.exe nicht gefunden (Windows SDK fehlt?)" }
+          echo "MAKECAT=$($makecat.FullName)"   >> $env:GITHUB_OUTPUT
+          echo "STAMPINF=$($stampinf.FullName)" >> $env:GITHUB_OUTPUT
+          echo "SIGNTOOL=$($signtool.FullName)" >> $env:GITHUB_OUTPUT
 
       - name: INF stempeln
+        shell: pwsh
         run: |
-          stampinf -f build/debug/btrfs.inf -d \* -v \*
-          stampinf -f build/debug/btrfs-vol.inf -d \* -v \*
-          stampinf -f build/release/btrfs.inf -d \* -v \*
-          stampinf -f build/release/btrfs-vol.inf -d \*
+          & '${{ steps.tools.outputs.STAMPINF }}' -f build/debug/btrfs.inf   -d '*' -v '*'
+          & '${{ steps.tools.outputs.STAMPINF }}' -f build/debug/btrfs-vol.inf -d '*' -v '*'
+          & '${{ steps.tools.outputs.STAMPINF }}' -f build/release/btrfs.inf   -d '*' -v '*'
+          & '${{ steps.tools.outputs.STAMPINF }}' -f build/release/btrfs-vol.inf -d '*' -v '*'
 
-      - name: Kataloge erzeugen
+      - name: Kataloge erzeugen (makecat)
+        shell: pwsh
         run: |
-          (cd build/debug   && makecat ../../src/btrfs.cdf)
-          (cd build/release && makecat ../../src/btrfs.cdf)
+          Push-Location build/debug   ; & '${{ steps.tools.outputs.MAKECAT }}' ..\..\src\btrfs.cdf ; Pop-Location
+          Push-Location build/release ; & '${{ steps.tools.outputs.MAKECAT }}' ..\..\src\btrfs.cdf ; Pop-Location
 
-      - name: Zertifikatskette speichern
+      - name: PFX schreiben
         env:
-          CERTIFICATE: ${{ secrets.CERTIFICATE }}
-        run: echo "${CERTIFICATE}" > codesigning.crt
-
-      - name: CAT signieren (PKCS#11)
-        env:
-          PKCS11CERT: ${{ secrets.PKCS11CERT }}
-          PKCS11KEY:  ${{ secrets.PKCS11KEY }}
+          PFX_BASE64: ${{ secrets.PFX_BASE64 }}
+        shell: pwsh
         run: |
-          for i in build/{debug,release}/btrfs.cat; do
-            osslsigncode sign \
-              -pkcs11module /usr/lib64/libcrypto3PKCS.so \
-              -pkcs11cert "${PKCS11CERT}" -key "${PKCS11KEY}" \
-              -certs codesigning.crt \
-              -t http://timestamp.digicert.com \
-              -in "$i" -out tmp && mv tmp "$i"
-          done
+          [IO.File]::WriteAllBytes("codesigning.pfx",[Convert]::FromBase64String($env:PFX_BASE64))
 
-      - name: BINs/DLLs signieren (PKCS#11)
+      - name: CAT signieren (signtool)
         env:
-          PKCS11CERT: ${{ secrets.PKCS11CERT }}
-          PKCS11KEY:  ${{ secrets.PKCS11KEY }}
+          PFX_PASS: ${{ secrets.PFX_PASS }}
+        shell: pwsh
         run: |
-          for i in build/{debug,release}/{amd64,x86,aarch64,arm}/{btrfs.sys,mkbtrfs.exe,shellbtrfs.dll,ubtrfs.dll}; do
-            [ -f "$i" ] || continue
-            osslsigncode sign \
-              -pkcs11module /usr/lib64/libcrypto3PKCS.so \
-              -pkcs11cert "${PKCS11CERT}" -key "${PKCS11KEY}" \
-              -certs codesigning.crt \
-              -t http://timestamp.digicert.com -ph \
-              -in "$i" -out tmp && mv tmp "$i"
-          done
+          Get-ChildItem build -Recurse -Filter btrfs.cat | ForEach-Object {
+            & '${{ steps.tools.outputs.SIGNTOOL }}' sign /fd sha256 /td sha256 /tr http://timestamp.digicert.com /f codesigning.pfx /p "$env:PFX_PASS" $_.FullName
+          }
+
+      - name: BINs/DLLs signieren (signtool, page-hash)
+        env:
+          PFX_PASS: ${{ secrets.PFX_PASS }}
+        shell: pwsh
+        run: |
+          $targets = @("btrfs.sys","mkbtrfs.exe","shellbtrfs.dll","ubtrfs.dll")
+          foreach($t in $targets){
+            Get-ChildItem build -Recurse -Filter $t | ForEach-Object {
+              & '${{ steps.tools.outputs.SIGNTOOL }}' sign /fd sha256 /td sha256 /tr http://timestamp.digicert.com /ph /f codesigning.pfx /p "$env:PFX_PASS" $_.FullName
+            }
+          }
 
       - uses: actions/upload-artifact@v4
         with:
