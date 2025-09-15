@@ -22,13 +22,13 @@ jobs:
         shell: pwsh
         run: echo "SHORT_SHA=$(${env:GITHUB_SHA}.Substring(0,8))" >> $env:GITHUB_ENV
 
-      # Windows SDK liefert makecat.exe & signtool.exe
+      # Windows SDK (liefert u. a. makecat.exe & signtool.exe)
       - name: Windows SDK installieren
         uses: GuillaumeFalourd/setup-windows10-sdk-action@v2.4
         with:
           sdk-version: ${{ env.SDK_VERSION }}
 
-      # WDK liefert stampinf.exe (mit einfachem Retry)
+      # WDK (liefert stampinf.exe) – winget + einfacher Retry
       - name: WDK installieren (winget, mit Retry)
         shell: pwsh
         run: |
@@ -49,120 +49,92 @@ jobs:
           }
           Install-Winget -Id $env:WDK_ID
 
-      # Ninja optional nachinstallieren; sonst VS-Generator benutzen
-      - name: Ninja sicherstellen (optional)
-        shell: pwsh
-        run: |
-          if (-not (Get-Command ninja.exe -EA SilentlyContinue)) {
-            choco install ninja --no-progress -y
-          }
-
       - name: Build-Ordner
         shell: pwsh
         run: |
           $arches  = @('amd64','x86','aarch64','arm')
           $configs = @('debug','release')
-
           foreach ($cfg in $configs) {
             foreach ($arch in $arches) {
               New-Item -ItemType Directory -Force -Path "build/$cfg/$arch" | Out-Null
             }
           }
-
           foreach ($cfg in $configs) {
             foreach ($arch in $arches) {
               New-Item -ItemType Directory -Force -Path "build/pdb/$cfg/$arch" | Out-Null
             }
           }
 
-      # Generator wählen (Ninja bevorzugt, sonst VS 2022 mit --config)
-      - name: Generator wählen
+      # Wir erzwingen bewusst den VS-Generator (stabil auf GitHub Runnern)
+      - name: Generator & Build-Flags setzen
         id: gen
         shell: pwsh
         run: |
-          $gen = "Ninja"
-          if (-not (Get-Command ninja.exe -EA SilentlyContinue)) { $gen = "Visual Studio 17 2022" }
-          $cfgDbg = ""
-          $cfgRel = ""
-          if ($gen -eq "Visual Studio 17 2022") {
-            $cfgDbg = "--config Debug"
-            $cfgRel = "--config RelWithDebInfo"
-          }
-          "GEN=$gen"       | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
-          "CFGDBG=$cfgDbg" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
-          "CFGREL=$cfgRel" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          "GEN=Visual Studio 17 2022" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          "CFGDBG=--config Debug" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          "CFGREL=--config RelWithDebInfo" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
 
       # ---- AMD64 ----
-      - name: MSVC Env (amd64)
-        uses: ilammy/msvc-dev-cmd@v1
-        with:
-          arch: amd64
-      - name: CMake (amd64)
+      - name: CMake Configure+Build (amd64)
         shell: pwsh
         run: |
           $G="${{ steps.gen.outputs.GEN }}"; $P=$env:NUMBER_OF_PROCESSORS
           $CFGDBG="${{ steps.gen.outputs.CFGDBG }}"; $CFGREL="${{ steps.gen.outputs.CFGREL }}"
-          cmake -G "$G" -DCMAKE_TOOLCHAIN_FILE=msvc-amd64.cmake   -DCMAKE_BUILD_TYPE=Debug          -DWITH_TEST=OFF -S . -B build/debug/amd64
+          cmake -G "$G" -A x64 -DWITH_TEST=OFF -S . -B build/debug/amd64
           cmake --build build/debug/amd64   --parallel $P $CFGDBG
-          cmake -G "$G" -DCMAKE_TOOLCHAIN_FILE=msvc-amd64.cmake   -DCMAKE_BUILD_TYPE=RelWithDebInfo -DWITH_TEST=OFF -S . -B build/release/amd64
+          cmake -G "$G" -A x64 -DWITH_TEST=OFF -S . -B build/release/amd64
           cmake --build build/release/amd64 --parallel $P $CFGREL
 
       # ---- x86 ----
-      - name: MSVC Env (amd64_x86)
-        uses: ilammy/msvc-dev-cmd@v1
-        with:
-          arch: amd64_x86
-      - name: CMake (x86)
+      - name: CMake Configure+Build (x86)
         shell: pwsh
         run: |
           $G="${{ steps.gen.outputs.GEN }}"; $P=$env:NUMBER_OF_PROCESSORS
           $CFGDBG="${{ steps.gen.outputs.CFGDBG }}"; $CFGREL="${{ steps.gen.outputs.CFGREL }}"
-          cmake -G "$G" -DCMAKE_TOOLCHAIN_FILE=msvc-x86.cmake     -DCMAKE_BUILD_TYPE=Debug          -DWITH_TEST=OFF -S . -B build/debug/x86
+          cmake -G "$G" -A Win32 -DWITH_TEST=OFF -S . -B build/debug/x86
           cmake --build build/debug/x86     --parallel $P $CFGDBG
-          cmake -G "$G" -DCMAKE_TOOLCHAIN_FILE=msvc-x86.cmake     -DCMAKE_BUILD_TYPE=RelWithDebInfo -DWITH_TEST=OFF -S . -B build/release/x86
+          cmake -G "$G" -A Win32 -DWITH_TEST=OFF -S . -B build/release/x86
           cmake --build build/release/x86   --parallel $P $CFGREL
 
       # ---- ARM64 ----
-      - name: MSVC Env (amd64_arm64)
-        uses: ilammy/msvc-dev-cmd@v1
-        with:
-          arch: amd64_arm64
-      - name: CMake (arm64)
+      - name: CMake Configure+Build (arm64)
         shell: pwsh
         run: |
           $G="${{ steps.gen.outputs.GEN }}"; $P=$env:NUMBER_OF_PROCESSORS
           $CFGDBG="${{ steps.gen.outputs.CFGDBG }}"; $CFGREL="${{ steps.gen.outputs.CFGREL }}"
-          cmake -G "$G" -DCMAKE_TOOLCHAIN_FILE=msvc-aarch64.cmake -DCMAKE_BUILD_TYPE=Debug          -DWITH_TEST=OFF -S . -B build/debug/aarch64
+          cmake -G "$G" -A ARM64 -DWITH_TEST=OFF -S . -B build/debug/aarch64
           cmake --build build/debug/aarch64 --parallel $P $CFGDBG
-          cmake -G "$G" -DCMAKE_TOOLCHAIN_FILE=msvc-aarch64.cmake -DCMAKE_BUILD_TYPE=RelWithDebInfo -DWITH_TEST=OFF -S . -B build/release/aarch64
+          cmake -G "$G" -A ARM64 -DWITH_TEST=OFF -S . -B build/release/aarch64
           cmake --build build/release/aarch64 --parallel $P $CFGREL
 
-      # ---- ARMv7 ----
-      - name: MSVC Env (amd64_arm)
-        uses: ilammy/msvc-dev-cmd@v1
-        with:
-          arch: amd64_arm
-      - name: CMake (armv7)
+      # ---- ARMv7 (ARM32) ----
+      - name: CMake Configure+Build (armv7)
         shell: pwsh
         run: |
           $G="${{ steps.gen.outputs.GEN }}"; $P=$env:NUMBER_OF_PROCESSORS
           $CFGDBG="${{ steps.gen.outputs.CFGDBG }}"; $CFGREL="${{ steps.gen.outputs.CFGREL }}"
-          cmake -G "$G" -DCMAKE_TOOLCHAIN_FILE=msvc-armv7.cmake   -DCMAKE_BUILD_TYPE=Debug          -DWITH_TEST=OFF -S . -B build/debug/arm
+          cmake -G "$G" -A ARM -DWITH_TEST=OFF -S . -B build/debug/arm
           cmake --build build/debug/arm     --parallel $P $CFGDBG
-          cmake -G "$G" -DCMAKE_TOOLCHAIN_FILE=msvc-armv7.cmake   -DCMAKE_BUILD_TYPE=RelWithDebInfo -DWITH_TEST=OFF -S . -B build/release/arm
+          cmake -G "$G" -A ARM -DWITH_TEST=OFF -S . -B build/release/arm
           cmake --build build/release/arm   --parallel $P $CFGREL
 
-      - name: PDB einsammeln
+      - name: PDB einsammeln (rekursiv)
         shell: pwsh
         run: |
-          Get-ChildItem build/debug/amd64/*.pdb     -EA SilentlyContinue | Move-Item -Dest build/pdb/debug/amd64/     -Force
-          Get-ChildItem build/debug/x86/*.pdb       -EA SilentlyContinue | Move-Item -Dest build/pdb/debug/x86/       -Force
-          Get-ChildItem build/debug/aarch64/*.pdb   -EA SilentlyContinue | Move-Item -Dest build/pdb/debug/aarch64/   -Force
-          Get-ChildItem build/debug/arm/*.pdb       -EA SilentlyContinue | Move-Item -Dest build/pdb/debug/arm/       -Force
-          Get-ChildItem build/release/amd64/*.pdb   -EA SilentlyContinue | Move-Item -Dest build/pdb/release/amd64/   -Force
-          Get-ChildItem build/release/x86/*.pdb     -EA SilentlyContinue | Move-Item -Dest build/pdb/release/x86/     -Force
-          Get-ChildItem build/release/aarch64/*.pdb -EA SilentlyContinue | Move-Item -Dest build/pdb/release/aarch64/ -Force
-          Get-ChildItem build/release/arm/*.pdb     -EA SilentlyContinue | Move-Item -Dest build/pdb/release/arm/     -Force
+          $map = @{
+            "build/debug/amd64"   = "build/pdb/debug/amd64"
+            "build/debug/x86"     = "build/pdb/debug/x86"
+            "build/debug/aarch64" = "build/pdb/debug/aarch64"
+            "build/debug/arm"     = "build/pdb/debug/arm"
+            "build/release/amd64" = "build/pdb/release/amd64"
+            "build/release/x86"   = "build/pdb/release/x86"
+            "build/release/aarch64" = "build/pdb/release/aarch64"
+            "build/release/arm"   = "build/pdb/release/arm"
+          }
+          foreach($k in $map.Keys){
+            Get-ChildItem $k -Recurse -Filter *.pdb -EA SilentlyContinue | `
+              Move-Item -Destination $map[$k] -Force
+          }
 
       - name: INF kopieren
         shell: pwsh
@@ -193,8 +165,7 @@ jobs:
           & '${{ steps.tools.outputs.STAMPINF }}' -f build/debug/btrfs.inf       -d '*' -v '*'
           & '${{ steps.tools.outputs.STAMPINF }}' -f build/debug/btrfs-vol.inf   -d '*' -v '*'
           & '${{ steps.tools.outputs.STAMPINF }}' -f build/release/btrfs.inf     -d '*' -v '*'
-          & '${{ steps.tools.outputs.STAMPINF }}' -f build/release/btrfs-vol.inf -d '* ' -v '*'
-          # ^ Tippfehler vermeiden: falls obige Zeile meckert, ersetze "-d '* '" durch "-d '*'"
+          & '${{ steps.tools.outputs.STAMPINF }}' -f build/release/btrfs-vol.inf -d '*' -v '*'
 
       - name: Kataloge erzeugen (makecat)
         shell: pwsh
